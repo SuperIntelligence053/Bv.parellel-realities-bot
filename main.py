@@ -43,7 +43,9 @@ def gemini_generate_story(gemini_key: str) -> dict:
     """
     Calls Gemini and returns a dict with:
       title, hook, script, on_screen_captions, description, tags, image_prompts, voice
-    Robustly extracts JSON even if Gemini adds extra text.
+    Robustly extracts JSON even if Gemini adds extra text like:
+      json
+      { ... }
     """
 
     tones = ["cinematic", "intimate", "tense", "mysterious", "urgent", "reflective"]
@@ -119,21 +121,23 @@ Constraints:
     text = (text or "").strip()
 
     if not text:
-        # Print full response for debugging
         print("Gemini returned empty text. Full response JSON:")
         print(json.dumps(data, indent=2))
         raise ValueError("Gemini returned empty response text")
 
-    # If Gemini returns fenced code blocks, strip them
+    # Strip fenced code blocks if present
     if text.startswith("```"):
         parts = text.split("```")
-        # try to take the inside block
         if len(parts) >= 2:
             text = parts[1].strip()
         else:
             text = text.strip("`").strip()
 
-    # Extract the first JSON object from the response
+    # IMPORTANT: Gemini sometimes prefixes with "json"
+    if text.lower().startswith("json"):
+        text = text[4:].strip()
+
+    # Extract JSON object from the response (first { to last })
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -158,9 +162,13 @@ Constraints:
         print(json.dumps(story, indent=2, ensure_ascii=False))
         raise ValueError(f"Gemini JSON missing keys: {missing}")
 
-    # Ensure 7 prompts
+    # Ensure image prompts list
     if not isinstance(story.get("image_prompts"), list) or len(story["image_prompts"]) < 7:
         raise ValueError("Gemini image_prompts must be a list with at least 7 prompts")
+
+    # Provide optional keys if absent
+    story.setdefault("on_screen_captions", [])
+    story.setdefault("hook", "")
 
     return story
 
@@ -189,14 +197,13 @@ def hf_generate_image(hf_token: str, prompt: str, out_path: Path):
     for attempt in range(8):
         resp = requests.post(api_url, headers=headers, json=payload, timeout=180)
 
-        # HF returns 503 while loading
         if resp.status_code == 503:
             wait = 8 + attempt * 4
             print(f"HF 503 (loading). Waiting {wait}s...")
             time.sleep(wait)
             continue
 
-        # HF returns JSON errors sometimes
+        # Sometimes HF returns JSON error payload
         if "application/json" in resp.headers.get("content-type", ""):
             try:
                 err = resp.json()
@@ -227,7 +234,6 @@ def run(cmd):
 
 
 def build_video(images, audio_mp3: Path, captions_lines, out_mp4: Path):
-    # 7 images -> 35 seconds
     durations = [5, 5, 5, 5, 5, 5, 5]
 
     concat_txt = OUTDIR / "images.txt"
@@ -235,10 +241,8 @@ def build_video(images, audio_mp3: Path, captions_lines, out_mp4: Path):
         for img, dur in zip(images, durations):
             f.write(f"file '{img.as_posix()}'\n")
             f.write(f"duration {dur}\n")
-        # concat demuxer requires last file repeated
         f.write(f"file '{images[-1].as_posix()}'\n")
 
-    # Captions: show line-by-line
     cap = captions_lines[:12] if captions_lines else ["Wat als alles anders liep?"]
     seg = max(2.5, 35.0 / len(cap))
 
@@ -290,7 +294,6 @@ def build_video(images, audio_mp3: Path, captions_lines, out_mp4: Path):
         ]
     )
 
-    # Merge audio
     run(
         [
             "ffmpeg",
@@ -408,7 +411,9 @@ def main():
 
     # Update state
     state["day"] = day + 1
-    state.setdefault("uploads", []).append({"day": day + 1, "video_id": video_id, "title": story.get("title", "")})
+    state.setdefault("uploads", []).append(
+        {"day": day + 1, "video_id": video_id, "title": story.get("title", "")}
+    )
     save_state(state)
 
 
