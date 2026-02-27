@@ -92,12 +92,26 @@ Constraints:
     r.raise_for_status()
     data = r.json()
 
-    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    if text.startswith("```"):
-        text = text.split("```", 2)[1].strip()
+    text = data["candidates"][0]["content"]["parts"][0].get("text", "").strip()
 
+if not text:
+    raise ValueError("Gemini returned empty response")
+
+# Try to extract JSON block if extra text is present
+start = text.find("{")
+end = text.rfind("}")
+
+if start != -1 and end != -1:
+    text = text[start:end+1]
+
+try:
     story = json.loads(text)
-    return story
+except Exception as e:
+    print("Gemini raw response:")
+    print(text)
+    raise e
+
+return story
 
 
 def hf_generate_image(hf_token: str, prompt: str, out_path: Path):
